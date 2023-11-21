@@ -27,13 +27,12 @@ class SASRec(nn.Module):
         self.user_num = user_num
         self.item_num = item_num
         self.dev = args.device
-        
-        if args.l2_reg > 0:
+
+        self.l2_reg = args.l2_emb
+        if self.l2_reg > 0:
             self.regularization = nn.Embedding(self.item_num+1, args.hidden_units, padding_idx=0) 
-        self.l2_reg = args.l2_reg
 
         self.item_emb = nn.Embedding(self.item_num+1, args.hidden_units, padding_idx=0)
-        # self._item_embedding(self.item_num+1, args.hidden_units, zero_pad=True, scale=False, with_t=False, l2_reg=args.l2_reg)
 
         self.pos_emb = nn.Embedding(args.maxlen, args.hidden_units) 
         self.emb_dropout = nn.Dropout(p=args.dropout_rate)

@@ -5,12 +5,35 @@ import numpy as np
 from collections import defaultdict
 from multiprocessing import Process, Queue
 
+def coverage_criterion(preds, targets):
+    # need to implement
+    return None
+
 def random_neq(l, r, s, weights):
     t = list(set(range(1,r)) - s)
     for i in s:
-        weights[i] = 0
+        weights[i-1] = 0
     return np.random.choice(t, p=weights)
-def sample_function(user_train, usernum, itemnum, batch_size, maxlen, result_queue, SEED, Alpha=0.5):
+
+def calWeight(user_train, usernum, itemnum, alpha):
+    all_items = list(set(item for sublist in user_train.values() for item in sublist))
+    item_freq = [0] * itemnum 
+    for item in all_items:
+        cnt = 0
+        for sublist in user_train.values():
+            if item in sublist:
+                cnt += 1
+        item_freq[item-1] = cnt
+    
+    total_freq = np.sum(item_freq)
+    weights = [0] * itemnum
+    for i in range(itemnum):
+        prob = alpha*(item_freq[i]/total_freq) + (1-alpha)(1/itemnum)
+        weights[i] = prob
+    return weights
+
+def sample_function(user_train, usernum, itemnum, batch_size, maxlen, result_queue, SEED, alpha=0.5):
+    weights = calWeight(user_train, usernum, itemnum, alpha)
     def sample():
         user = np.random.randint(1, usernum + 1)
         while len(user_train[user]) <= 1: 
@@ -23,19 +46,13 @@ def sample_function(user_train, usernum, itemnum, batch_size, maxlen, result_que
         idx = maxlen - 1
 
         ts = set(user_train[user])
-        all_items = set(item for sublist in user_train.values() for item in sublist)
-        nunique_items = len(all_items)
-        total_freq = sum(len(user_train[uid]) for uid in user_train)
 
         for i in reversed(user_train[user][:-1]):
             seq[idx] = i
             pos[idx] = nxt
 
-            freq_i = sum(1 for uid in user_train if i in user_train[uid])
-            prob = Alpha * (freq_i / total_freq) + (1-Alpha)*(1 / nunique_items)
-
-            if nxt != 0 and np.random.rand()<prob: 
-                neg[idx] = random_neq(1, itemnum + 1, ts)
+            if nxt != 0: 
+                neg[idx] = random_neq(1, itemnum + 1, ts, weights)
             nxt = i
             idx -= 1
             if idx == -1: break

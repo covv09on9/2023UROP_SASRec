@@ -1,6 +1,7 @@
 import os
 import time
 import torch
+import torch.nn as nn
 import argparse
 
 from model import SASRec
@@ -23,11 +24,10 @@ parser.add_argument('--num_epochs', default=201, type=int)
 parser.add_argument('--num_heads', default=1, type=int)
 parser.add_argument('--dropout_rate', default=0.5, type=float)
 parser.add_argument('--l2_emb', default=0.0, type=float)
-parser.add_argument('--device', default='cpu', type=str)
+parser.add_argument('--device', default='cuda', type=str)
 parser.add_argument('--inference_only', default=False, type=str2bool)
-parser.add_argument('--state_dict_path', default=None, type=str)
-
 args = parser.parse_args()
+
 if not os.path.isdir(args.dataset + '_' + args.train_dir):
     os.makedirs(args.dataset + '_' + args.train_dir)
 with open(os.path.join(args.dataset + '_' + args.train_dir, 'args.txt'), 'w') as f:
@@ -48,11 +48,11 @@ if __name__ == '__main__':
     f = open(os.path.join(args.dataset + '_' + args.train_dir, 'log.txt'), 'w')
     
     sampler = WarpSampler(user_train, usernum, itemnum, batch_size=args.batch_size, maxlen=args.maxlen, n_workers=3)
-    model = SASRec(usernum, itemnum, args).to(args.device) # no ReLU activation in original SASRec implementation?
+    model = SASRec(usernum, itemnum, args).to(args.device) 
     
     for name, param in model.named_parameters():
         try:
-            torch.nn.init.xavier_normal_(param.data)
+            nn.init.xavier_normal_(param.data)
         except:
             pass # just ignore those failed init layers
     
@@ -62,17 +62,6 @@ if __name__ == '__main__':
     model.train() # enable model training
     
     epoch_start_idx = 1
-    if args.state_dict_path is not None:
-        try:
-            model.load_state_dict(torch.load(args.state_dict_path, map_location=torch.device(args.device)))
-            tail = args.state_dict_path[args.state_dict_path.find('epoch=') + 6:]
-            epoch_start_idx = int(tail[:tail.find('.')]) + 1
-        except: # in case your pytorch version is not 1.6 etc., pls debug by pdb if load weights failed
-            print('failed loading state_dicts, pls check file path: ', end="")
-            print(args.state_dict_path)
-            print('pdb enabled for your quick check, pls type exit() if you do not need it')
-            import pdb; pdb.set_trace()
-            
     
     if args.inference_only:
         model.eval()
@@ -81,7 +70,7 @@ if __name__ == '__main__':
     
     # ce_criterion = torch.nn.CrossEntropyLoss()
     # https://github.com/NVIDIA/pix2pixHD/issues/9 how could an old bug appear again...
-    bce_criterion = torch.nn.BCEWithLogitsLoss() # torch.nn.BCELoss()
+    bce_criterion = nn.BCEWithLogitsLoss() # torch.nn.BCELoss()
     adam_optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, betas=(0.9, 0.98))
     
     T = 0.0
@@ -99,6 +88,7 @@ if __name__ == '__main__':
             indices = np.where(pos != 0)
             loss = bce_criterion(pos_logits[indices], pos_labels[indices])
             loss += bce_criterion(neg_logits[indices], neg_labels[indices])
+            loss += coverage_criterion(pos_logits[indices], pos_labels[indices])
             for param in model.item_emb.parameters(): loss += args.l2_emb * torch.norm(param)
             loss.backward()
             adam_optimizer.step()
