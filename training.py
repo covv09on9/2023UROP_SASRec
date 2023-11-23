@@ -3,8 +3,8 @@ import time
 import torch
 import argparse
 
-from .model import *
-from .util import *
+from model import *
+from util import *
 
 def str2bool(s):
     if s not in {'false', 'true'}:
@@ -19,7 +19,7 @@ parser.add_argument('--lr', default=0.001, type=float)
 parser.add_argument('--maxlen', default=50, type=int)
 parser.add_argument('--hidden_units', default=50, type=int)
 parser.add_argument('--num_blocks', default=2, type=int)
-parser.add_argument('--num_epochs', default=201, type=int)
+parser.add_argument('--num_epochs', default=10, type=int)
 parser.add_argument('--num_heads', default=1, type=int)
 parser.add_argument('--dropout_rate', default=0.5, type=float)
 parser.add_argument('--l2_emb', default=0.0, type=float)
@@ -46,8 +46,8 @@ if __name__ == '__main__':
     print('average sequence length: %.2f' % (cc / len(user_train)))
     
     f = open(os.path.join(args.dataset + '_' + args.train_dir, 'log.txt'), 'w')
-    weights, itemlst = calWeights(user_train, usernum, itemnum, 0.5)
-    sampler = WarpSampler(user_train, usernum, itemnum, batch_size=args.batch_size, maxlen=args.maxlen, n_workers=3)
+    weights, itemlst = calWeight(user_train, usernum, itemnum, 0.5)
+    sampler = WarpSampler(user_train, usernum, itemnum, weights=weights, batch_size=args.batch_size, maxlen=args.maxlen, n_workers=3)
     model = SASRec(usernum, itemnum, args).to(args.device) # no ReLU activation in original SASRec implementation?
     
     for name, param in model.named_parameters():

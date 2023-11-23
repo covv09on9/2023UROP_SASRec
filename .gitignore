@@ -1,3 +1,5 @@
 practice.ipynb
 */.venv/*
 .venv/*
+*__train/*
+__pycache__/*

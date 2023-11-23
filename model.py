@@ -1,10 +1,10 @@
-import argparse
 import torch
 import torch.nn as nn
 from torch.utils.data import dataloader, dataset
 import torch.nn.functional as F
 from typing import Union, Callable
 import numpy as np
+from util import *
 
 class PointWiseFeedForward(nn.Module):
     def __init__(self, hidden_units, dropout_rate):
@@ -58,22 +58,14 @@ class SASRec(nn.Module):
     def get_itemEmb(self):
         return self.item_emb
 
-
-    def positional_encoding(batch_size, sentence_length, dim, dtype=torch.float32):
-        encoded_vec = np.array([pos/np.power(10000, 2*i/dim) for pos in range(sentence_length) for i in range(dim)])
-        encoded_vec[::2] = np.sin(encoded_vec[::2])
-        encoded_vec[1::2] = np.cos(encoded_vec[1::2])
-
-        single_sequence_encoding = torch.tensor(encoded_vec.reshape([sentence_length, dim]), dtype=dtype)
-        batch_encoding = single_sequence_encoding.unsqueeze(0).expand(batch_size, -1, -1)
-        return batch_encoding
-
     def log2feats(self, log_seqs):
         seqs = self.item_emb(torch.LongTensor(log_seqs).to(self.dev))
         seqs *= self.item_emb.embedding_dim ** 0.5
         # positions = np.tile(np.array(range(log_seqs.shape[1])), [log_seqs.shape[0], 1])
         # seqs += self.pos_emb(torch.LongTensor(positions).to(self.dev))
-        seqs += self.positional_encoding(seqs.shape[0], seqs.shape[1], seqs.shape[2])
+        pos_emb = positional_encoding(seqs.shape[0], seqs.shape[1], seqs.shape[2], dtype=torch.float32)
+        pos_emb.requires_grad = False
+        seqs += pos_emb
         seqs = self.emb_dropout(seqs)
 
         timeline_mask = torch.BoolTensor(log_seqs == 0).to(self.dev)

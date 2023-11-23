@@ -3,8 +3,18 @@ import copy
 import random
 import numpy as np
 from collections import defaultdict
+import torch
 from multiprocessing import Process, Queue
 
+def positional_encoding(batch_size, sentence_length, dim, dtype=torch.float32):
+    encoded_vec = np.array([pos/np.power(10000, 2*i/dim) for pos in range(sentence_length) for i in range(dim)])
+    encoded_vec[::2] = np.sin(encoded_vec[::2])
+    encoded_vec[1::2] = np.cos(encoded_vec[1::2])
+
+    single_sequence_encoding = torch.tensor(encoded_vec.reshape([sentence_length, dim]), dtype=dtype)
+    batch_encoding = single_sequence_encoding.unsqueeze(0).expand(batch_size, -1, -1)
+    return batch_encoding
+    
 def loss_coverage(log_feats, item_matrix):
     mask = log_feats.sum(-1)
     mask= torch.BoolTensor(mask == 0).to("cpu")
@@ -71,7 +81,7 @@ def sample_function(user_train, usernum, itemnum, batch_size, maxlen, result_que
         result_queue.put(zip(*one_batch))
 
 class WarpSampler(object):
-    def __init__(self, User, usernum, itemnum, batch_size=64, maxlen=10, n_workers=1):
+    def __init__(self, User, usernum, itemnum, weights,batch_size=64, maxlen=10, n_workers=1):
         self.result_queue = Queue(maxsize=n_workers * 10)
         self.processors = []
         for i in range(n_workers):
@@ -82,7 +92,8 @@ class WarpSampler(object):
                                                       batch_size,
                                                       maxlen,
                                                       self.result_queue,
-                                                      np.random.randint(2e9)
+                                                      np.random.randint(2e9),
+                                                      weights
                                                       )))
             self.processors[-1].daemon = True
             self.processors[-1].start()
