@@ -1,8 +1,6 @@
 practice.ipynb
 */.venv/*
 .venv/*
-.DS_Store
-__pycache__/
-*_default/
-
-*_train/*
+*__train/*
+__pycache__/*
+model/*

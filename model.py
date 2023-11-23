@@ -1,7 +1,10 @@
-import numpy as np
 import torch
 import torch.nn as nn
-
+from torch.utils.data import dataloader, dataset
+import torch.nn.functional as F
+from typing import Union, Callable
+import numpy as np
+from util import *
 
 class PointWiseFeedForward(nn.Module):
     def __init__(self, hidden_units, dropout_rate):
@@ -24,9 +27,8 @@ class SASRec(nn.Module):
         self.user_num = user_num
         self.item_num = item_num
         self.dev = args.device
-
+        
         self.item_emb = nn.Embedding(self.item_num+1, args.hidden_units, padding_idx=0)
-        self.pos_emb = nn.Embedding(args.maxlen, args.hidden_units) # TO IMPROVE
         self.emb_dropout = nn.Dropout(p=args.dropout_rate)
 
         self.attention_layernorms = nn.ModuleList() # to be Q for self-attention
@@ -51,14 +53,17 @@ class SASRec(nn.Module):
             new_fwd_layer = PointWiseFeedForward(args.hidden_units, args.dropout_rate)
             self.forward_layers.append(new_fwd_layer)
 
-            # self.pos_sigmoid = nn.Sigmoid()
-            # self.neg_sigmoid = nn.Sigmoid()
+    def get_itemEmb(self):
+        return self.item_emb
 
     def log2feats(self, log_seqs):
         seqs = self.item_emb(torch.LongTensor(log_seqs).to(self.dev))
         seqs *= self.item_emb.embedding_dim ** 0.5
-        positions = np.tile(np.array(range(log_seqs.shape[1])), [log_seqs.shape[0], 1])
-        seqs += self.pos_emb(torch.LongTensor(positions).to(self.dev))
+        # positions = np.tile(np.array(range(log_seqs.shape[1])), [log_seqs.shape[0], 1])
+        # seqs += self.pos_emb(torch.LongTensor(positions).to(self.dev))
+        self.pos_emb = positional_encoding(seqs.shape[0], seqs.shape[1], seqs.shape[2], dtype=torch.float32)
+        self.pos_emb.requires_grad = False
+        seqs += self.pos_emb
         seqs = self.emb_dropout(seqs)
 
         timeline_mask = torch.BoolTensor(log_seqs == 0).to(self.dev)
@@ -93,9 +98,6 @@ class SASRec(nn.Module):
 
         pos_logits = (log_feats * pos_embs).sum(dim=-1)
         neg_logits = (log_feats * neg_embs).sum(dim=-1)
-
-        # pos_pred = self.pos_sigmoid(pos_logits)
-        # neg_pred = self.neg_sigmoid(neg_logits)
 
         return pos_logits, neg_logits # pos_pred, neg_pred
 
