@@ -1,43 +1,39 @@
+import os 
 import sys
 import copy
+import torch
 import random
 import numpy as np
 from collections import defaultdict
 from multiprocessing import Process, Queue
+import torch.nn as nn
 
-def coverage_criterion(preds, targets):
-    # need to implement
-    return None
+
+def bpr_loss(pos, neg):
+    bpr_loss = nn.LogSigmoid()(pos.sum()-neg.sum())
+    return -1 * bpr_loss
 
 def random_neq(l, r, s, weights):
-    t = list(set(range(1,r)) - s)
-    for i in s:
-        weights[i-1] = 0
-    return np.random.choice(t, p=weights)
+    t = np.random.choice(list(range(l,r)), p=weights)
+    while t in s:
+        t = np.random.choice(list(range(l,r)), p=weights)
+    return t
 
 def calWeight(user_train, usernum, itemnum, alpha):
-    all_items = list(set(item for sublist in user_train.values() for item in sublist))
-    item_freq = [0] * itemnum 
-    for item in all_items:
-        cnt = 0
-        for sublist in user_train.values():
-            if item in sublist:
-                cnt += 1
-        item_freq[item-1] = cnt
+    item_freq = np.zeros(itemnum)
+    for sublist in user_train.values():
+        items = np.array(sublist)
+        item_freq[items - 1] += 1 
     
     total_freq = np.sum(item_freq)
-    weights = [0] * itemnum
-    for i in range(itemnum):
-        prob = alpha*(item_freq[i]/total_freq) + (1-alpha)(1/itemnum)
-        weights[i] = prob
+    weights = alpha * (item_freq / total_freq) + (1 - alpha) / itemnum
+
     return weights
 
-def sample_function(user_train, usernum, itemnum, batch_size, maxlen, result_queue, SEED, alpha=0.5):
-    weights = calWeight(user_train, usernum, itemnum, alpha)
+def sample_function(user_train, usernum, itemnum, batch_size, maxlen, result_queue, SEED, weights):
     def sample():
         user = np.random.randint(1, usernum + 1)
-        while len(user_train[user]) <= 1: 
-            user = np.random.randint(1, usernum + 1)
+        while len(user_train[user]) <= 1: user = np.random.randint(1, usernum + 1)
 
         seq = np.zeros([maxlen], dtype=np.int32)
         pos = np.zeros([maxlen], dtype=np.int32)
@@ -46,13 +42,10 @@ def sample_function(user_train, usernum, itemnum, batch_size, maxlen, result_que
         idx = maxlen - 1
 
         ts = set(user_train[user])
-
         for i in reversed(user_train[user][:-1]):
             seq[idx] = i
             pos[idx] = nxt
-
-            if nxt != 0: 
-                neg[idx] = random_neq(1, itemnum + 1, ts, weights)
+            if nxt != 0: neg[idx] = random_neq(1, itemnum + 1, ts, weights)
             nxt = i
             idx -= 1
             if idx == -1: break
@@ -67,9 +60,8 @@ def sample_function(user_train, usernum, itemnum, batch_size, maxlen, result_que
 
         result_queue.put(zip(*one_batch))
 
-
 class WarpSampler(object):
-    def __init__(self, User, usernum, itemnum, batch_size=64, maxlen=10, n_workers=1):
+    def __init__(self, User, usernum, itemnum, weights,batch_size=64, maxlen=10, n_workers=1):
         self.result_queue = Queue(maxsize=n_workers * 10)
         self.processors = []
         for i in range(n_workers):
@@ -80,7 +72,8 @@ class WarpSampler(object):
                                                       batch_size,
                                                       maxlen,
                                                       self.result_queue,
-                                                      np.random.randint(2e9)
+                                                      np.random.randint(2e9),
+                                                      weights
                                                       )))
             self.processors[-1].daemon = True
             self.processors[-1].start()
@@ -93,6 +86,7 @@ class WarpSampler(object):
             p.terminate()
             p.join()
 
+# train/val/test data generation
 def data_partition(fname):
     usernum = 0
     itemnum = 0
@@ -101,7 +95,7 @@ def data_partition(fname):
     user_valid = {}
     user_test = {}
     # assume user/item index starting from 1
-    f = open('data/%s.txt' % fname, 'r')
+    f = open(os.path.join(os.curdir(),'/data/%s.txt' % fname), 'r')
     for line in f:
         u, i = line.rstrip().split(' ')
         u = int(u)
@@ -123,7 +117,6 @@ def data_partition(fname):
             user_test[user] = []
             user_test[user].append(User[user][-1])
     return [user_train, user_valid, user_test, usernum, itemnum]
-
 
 def evaluate(model, dataset, args):
     [train, valid, test, usernum, itemnum] = copy.deepcopy(dataset)
@@ -173,7 +166,6 @@ def evaluate(model, dataset, args):
     return NDCG / valid_user, HT / valid_user
 
 
-# evaluate on val set
 def evaluate_valid(model, dataset, args):
     [train, valid, test, usernum, itemnum] = copy.deepcopy(dataset)
 
