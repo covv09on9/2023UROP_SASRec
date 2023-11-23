@@ -15,17 +15,15 @@ def positional_encoding(batch_size, sentence_length, dim, dtype=torch.float32):
     batch_encoding = single_sequence_encoding.unsqueeze(0).expand(batch_size, -1, -1)
     return batch_encoding
     
-def loss_coverage(log_feats, item_matrix):
-    mask = log_feats.sum(-1)
-    mask= torch.BoolTensor(mask == 0).to("cpu")
-    mask = ~mask
+def loss_coverage(log_feats, item_matrix, mask, itemnum):
     item_scores = torch.matmul(log_feats, item_matrix.t())
     softmax_final = item_scores.softmax(dim=-1)
     recommend_items = softmax_final.argmax(dim=-1)
+    recommend_items *= mask
     non_zero_recommend_items = recommend_items[recommend_items != 0]
     item_counts = torch.zeros(non_zero_recommend_items.max()+1, dtype=torch.int32)
     item_counts.scatter_add_(0, non_zero_recommend_items.view(-1), torch.ones_like(non_zero_recommend_items.view(-1), dtype=torch.int32))
-    coverage = -1 * torch.sum(item_counts > 0).item() / len(item_counts)
+    coverage = -1 * torch.sum(item_counts > 0).item() / itemnum
     item_probs = item_counts / torch.sum(item_counts)
     gini = 1 - torch.sum(item_probs**2)
     loss = coverage + gini
@@ -138,11 +136,30 @@ def data_partition(fname):
     return [user_train, user_valid, user_test, usernum, itemnum]
 
 
+def covTop10(model, seq:np.array, item_idx:np.array, args):
+    mask = torch.BoolTensor(seq == 0).to(args.device)
+    mask = ~mask
+    log_feats = model.log2feats(seq)
+    item_emb = model.get_itemEmb()
+    item_matrix = item_emb(torch.LongTensor(item_idx).to(args.device))
+    item_scores = torch.matmul(log_feats, item_matrix.t())
+    softmax_scores = item_scores.softmax(dim=-1)
+    _, top_k_items = torch.topk(softmax_scores, k=10, dim=-1)
+    top_k_items *= mask.unsqueeze(-1)
+    recommend_items = top_k_items.view(-1)
+    non_zero_recommend_items = recommend_items[recommend_items != 0]
+    non_zero_recommend_items
+    item_counts = torch.zeros(len(item_idx) + 1, dtype=torch.int32)
+    item_counts.scatter_add_(0, non_zero_recommend_items, torch.ones_like(non_zero_recommend_items, dtype=torch.int32))
+    coverage = torch.sum(item_counts > 0).item() / len(item_counts)
+    return coverage
+
 def evaluate(model, dataset, args):
     [train, valid, test, usernum, itemnum] = copy.deepcopy(dataset)
 
     NDCG = 0.0
     HT = 0.0
+    COV = 0.0
     valid_user = 0.0
 
     if usernum>10000:
@@ -168,14 +185,14 @@ def evaluate(model, dataset, args):
             t = np.random.randint(1, itemnum + 1)
             while t in rated: t = np.random.randint(1, itemnum + 1)
             item_idx.append(t)
-
+        cov = covTop10(model, np.array([seq]), np.array(item_idx), args)
         predictions = -model.predict(*[np.array(l) for l in [[u], [seq], item_idx]])
         predictions = predictions[0] # - for 1st argsort DESC
-
         rank = predictions.argsort().argsort()[0].item()
 
         valid_user += 1
 
+        COV += cov
         if rank < 10:
             NDCG += 1 / np.log2(rank + 2)
             HT += 1
@@ -183,7 +200,7 @@ def evaluate(model, dataset, args):
             print('.', end="")
             sys.stdout.flush()
 
-    return NDCG / valid_user, HT / valid_user
+    return NDCG / valid_user, HT / valid_user, COV / valid_user
 
 
 # evaluate on val set
@@ -193,6 +210,7 @@ def evaluate_valid(model, dataset, args):
     NDCG = 0.0
     valid_user = 0.0
     HT = 0.0
+    COV = 0.0
     if usernum>10000:
         users = random.sample(range(1, usernum + 1), 10000)
     else:
@@ -214,12 +232,13 @@ def evaluate_valid(model, dataset, args):
             t = np.random.randint(1, itemnum + 1)
             while t in rated: t = np.random.randint(1, itemnum + 1)
             item_idx.append(t)
-
+        
+        cov = covTop10(model, np.array([seq]), np.array(item_idx), args)
         predictions = -model.predict(*[np.array(l) for l in [[u], [seq], item_idx]])
         predictions = predictions[0]
 
         rank = predictions.argsort().argsort()[0].item()
-
+        COV += cov
         valid_user += 1
 
         if rank < 10:
@@ -229,4 +248,4 @@ def evaluate_valid(model, dataset, args):
             print('.', end="")
             sys.stdout.flush()
 
-    return NDCG / valid_user, HT / valid_user
+    return NDCG / valid_user, HT / valid_user, COV / valid_user

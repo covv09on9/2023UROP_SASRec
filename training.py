@@ -49,6 +49,9 @@ if __name__ == '__main__':
     sampler = WarpSampler(user_train, usernum, itemnum, weights=weights, batch_size=args.batch_size, maxlen=args.maxlen, n_workers=3)
     model = SASRec(usernum, itemnum, args).to(args.device)
     
+    if os.path.exists("/Users/kimwoojin/UROP/2023UROP_SASRec/model/model.pth"):
+        model.load_state_dict(torch.load("/Users/kimwoojin/UROP/2023UROP_SASRec/model/model.pth"))
+
     model.train()
     
     epoch_start_idx = 1
@@ -56,7 +59,7 @@ if __name__ == '__main__':
     if args.inference_only:
         model.eval()
         t_test = evaluate(model, dataset, args)
-        print('test (NDCG@10: %.4f, HR@10: %.4f)' % (t_test[0], t_test[1]))
+        print('test (NDCG@10: %.4f, HR@10: %.4f, COV@10: %0.4f)' % (t_test[0], t_test[1], t_test[2]))
     
     bce_criterion = torch.nn.BCEWithLogitsLoss() # torch.nn.BCELoss()
     adam_optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, betas=(0.9, 0.98))
@@ -73,6 +76,9 @@ if __name__ == '__main__':
             u, seq, pos, neg = sampler.next_batch() # tuples to ndarray
             u, seq, pos, neg = np.array(u), np.array(seq), np.array(pos), np.array(neg)
             pos_logits, neg_logits = model(u, seq, pos, neg)
+            mask = torch.BoolTensor(seq == 0).to("cpu")
+            mask = ~mask
+            mask.requires_grad=False
             log_feats = model.log2feats(seq)
             item_emb = model.get_itemEmb()
             item_matrix = item_emb(torch.LongTensor(itemlst).to(args.device))
@@ -80,15 +86,16 @@ if __name__ == '__main__':
             # print("\neye ball check raw_logits:"); print(pos_logits); print(neg_logits) # check pos_logits > 0, neg_logits < 0
             adam_optimizer.zero_grad()
             indices = np.where(pos != 0)
-            loss = bce_criterion(pos_logits[indices], pos_labels[indices])
-            loss += bce_criterion(neg_logits[indices], neg_labels[indices])
-            loss += loss_coverage(log_feats, item_matrix)
+            loss_bce = bce_criterion(pos_logits[indices], pos_labels[indices])
+            loss_bce += bce_criterion(neg_logits[indices], neg_labels[indices])
+            loss_cov = loss_coverage(log_feats, item_matrix, mask, len(itemlst))
+            loss = loss_bce + loss_cov
             for param in model.item_emb.parameters(): loss += args.l2_emb * torch.norm(param)
             
             epoch_loss += loss
             loss.backward()
             adam_optimizer.step()
-            print("loss in epoch {} iteration {}: {}".format(epoch, step, loss.item())) # expected 0.4~0.6 after init few epochs
+            print("loss in epoch {} iteration {}: {} / coverage in epoch {} iteration {}: {}".format(epoch, step, loss_bce.item(), epoch, step, loss_cov.item())) # expected 0.4~0.6 after init few epochs
         
         if epoch_loss/num_batch < final_loss :
             final_loss = epoch_loss/num_batch
@@ -98,8 +105,8 @@ if __name__ == '__main__':
             print('Evaluating', end='')
             t_test = evaluate(model, dataset, args)
             t_valid = evaluate_valid(model, dataset, args)
-            print('epoch:%d, time: %f(s), valid (NDCG@10: %.4f, HR@10: %.4f), test (NDCG@10: %.4f, HR@10: %.4f)'
-                    % (epoch, T, t_valid[0], t_valid[1], t_test[0], t_test[1]))
+            print('epoch:%d, time: %f(s), valid (NDCG@10: %.4f, HR@10: %.4f, COV@10:%.4f), test (NDCG@10: %.4f, HR@10: %.4f, COV@10:%.4f)'
+                    % (epoch, T, t_valid[0], t_valid[1], t_valid[2], t_test[0], t_test[1], t_test[2]))
             f.write(str(t_valid) + ' ' + str(t_test) + '\n')
             f.flush()
             t0 = time.time()
