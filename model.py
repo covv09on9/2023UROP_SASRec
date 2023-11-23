@@ -28,12 +28,7 @@ class SASRec(nn.Module):
         self.item_num = item_num
         self.dev = args.device
         
-        if args.l2_reg > 0:
-            self.regularization = nn.Embedding(self.item_num+1, args.hidden_units, padding_idx=0) 
-        self.l2_reg = args.l2_reg
-
         self.item_emb = nn.Embedding(self.item_num+1, args.hidden_units, padding_idx=0)
-        # self._item_embedding(self.item_num+1, args.hidden_units, zero_pad=True, scale=False, with_t=False, l2_reg=args.l2_reg)
 
         self.pos_emb = nn.Embedding(args.maxlen, args.hidden_units) 
         self.emb_dropout = nn.Dropout(p=args.dropout_rate)
@@ -60,17 +55,25 @@ class SASRec(nn.Module):
             new_fwd_layer = PointWiseFeedForward(args.hidden_units, args.dropout_rate)
             self.forward_layers.append(new_fwd_layer)
 
-            # self.pos_sigmoid = torch.nn.Sigmoid()
-            # self.neg_sigmoid = torch.nn.Sigmoid()
-    
+    def get_itemEmb(self):
+        return self.item_emb
+
+
+    def positional_encoding(batch_size, sentence_length, dim, dtype=torch.float32):
+        encoded_vec = np.array([pos/np.power(10000, 2*i/dim) for pos in range(sentence_length) for i in range(dim)])
+        encoded_vec[::2] = np.sin(encoded_vec[::2])
+        encoded_vec[1::2] = np.cos(encoded_vec[1::2])
+
+        single_sequence_encoding = torch.tensor(encoded_vec.reshape([sentence_length, dim]), dtype=dtype)
+        batch_encoding = single_sequence_encoding.unsqueeze(0).expand(batch_size, -1, -1)
+        return batch_encoding
+
     def log2feats(self, log_seqs):
         seqs = self.item_emb(torch.LongTensor(log_seqs).to(self.dev))
         seqs *= self.item_emb.embedding_dim ** 0.5
-        if self.l2_reg > 0:
-            reg_loss = torch.sum(self.regularization(log_seqs))
-            seqs += self.l2_reg * reg_loss
-        positions = np.tile(np.array(range(log_seqs.shape[1])), [log_seqs.shape[0], 1])
-        seqs += self.pos_emb(torch.LongTensor(positions).to(self.dev))
+        # positions = np.tile(np.array(range(log_seqs.shape[1])), [log_seqs.shape[0], 1])
+        # seqs += self.pos_emb(torch.LongTensor(positions).to(self.dev))
+        seqs += self.positional_encoding(seqs.shape[0], seqs.shape[1], seqs.shape[2])
         seqs = self.emb_dropout(seqs)
 
         timeline_mask = torch.BoolTensor(log_seqs == 0).to(self.dev)
@@ -105,9 +108,6 @@ class SASRec(nn.Module):
 
         pos_logits = (log_feats * pos_embs).sum(dim=-1)
         neg_logits = (log_feats * neg_embs).sum(dim=-1)
-
-        # pos_pred = self.pos_sigmoid(pos_logits)
-        # neg_pred = self.neg_sigmoid(neg_logits)
 
         return pos_logits, neg_logits # pos_pred, neg_pred
 

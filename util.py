@@ -5,37 +5,57 @@ import numpy as np
 from collections import defaultdict
 from multiprocessing import Process, Queue
 
+def loss_coverage(log_feats, item_matrix):
+    mask = log_feats.sum(-1)
+    mask= torch.BoolTensor(mask == 0).to("cpu")
+    mask = ~mask
+    item_scores = torch.matmul(log_feats, item_matrix.t())
+    softmax_final = item_scores.softmax(dim=-1)
+    recommend_items = softmax_final.argmax(dim=-1)
+    non_zero_recommend_items = recommend_items[recommend_items != 0]
+    item_counts = torch.zeros(non_zero_recommend_items.max()+1, dtype=torch.int32)
+    item_counts.scatter_add_(0, non_zero_recommend_items.view(-1), torch.ones_like(non_zero_recommend_items.view(-1), dtype=torch.int32))
+    coverage = -1 * torch.sum(item_counts > 0).item() / len(item_counts)
+    item_probs = item_counts / torch.sum(item_counts)
+    gini = 1 - torch.sum(item_probs**2)
+    loss = coverage + gini
+    return loss
+
 def random_neq(l, r, s, weights):
-    t = list(set(range(1,r)) - s)
-    for i in s:
-        weights[i] = 0
-    return np.random.choice(t, p=weights)
-def sample_function(user_train, usernum, itemnum, batch_size, maxlen, result_queue, SEED, Alpha=0.5):
+    t = np.random.choice(list(range(l,r)), p=weights)
+    while t in s:
+        t = np.random.choice(list(range(l,r)), p=weights)
+    return t
+
+def calWeight(user_train, usernum, itemnum, alpha):
+    item_freq = np.zeros(itemnum)
+    itemset = set()
+    for sublist in user_train.values():
+        items = np.array(sublist)
+        for item in sublist:
+            itemset.add(item)
+        item_freq[items - 1] += 1 
+    
+    total_freq = np.sum(item_freq)
+    weights = alpha * (item_freq / total_freq) + (1 - alpha) / len(item_freq)
+
+    return weights, list(itemset)
+
+def sample_function(user_train, usernum, itemnum, batch_size, maxlen, result_queue, SEED, weights):
     def sample():
         user = np.random.randint(1, usernum + 1)
-        while len(user_train[user]) <= 1: 
-            user = np.random.randint(1, usernum + 1)
+        while len(user_train[user]) <= 1: user = np.random.randint(1, usernum + 1)
 
         seq = np.zeros([maxlen], dtype=np.int32)
         pos = np.zeros([maxlen], dtype=np.int32)
         neg = np.zeros([maxlen], dtype=np.int32)
         nxt = user_train[user][-1]
         idx = maxlen - 1
-
         ts = set(user_train[user])
-        all_items = set(item for sublist in user_train.values() for item in sublist)
-        nunique_items = len(all_items)
-        total_freq = sum(len(user_train[uid]) for uid in user_train)
-
         for i in reversed(user_train[user][:-1]):
             seq[idx] = i
             pos[idx] = nxt
-
-            freq_i = sum(1 for uid in user_train if i in user_train[uid])
-            prob = Alpha * (freq_i / total_freq) + (1-Alpha)*(1 / nunique_items)
-
-            if nxt != 0 and np.random.rand()<prob: 
-                neg[idx] = random_neq(1, itemnum + 1, ts)
+            if nxt != 0: neg[idx] = random_neq(1, itemnum + 1, ts, weights)
             nxt = i
             idx -= 1
             if idx == -1: break
@@ -49,7 +69,6 @@ def sample_function(user_train, usernum, itemnum, batch_size, maxlen, result_que
             one_batch.append(sample())
 
         result_queue.put(zip(*one_batch))
-
 
 class WarpSampler(object):
     def __init__(self, User, usernum, itemnum, batch_size=64, maxlen=10, n_workers=1):

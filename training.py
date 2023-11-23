@@ -3,8 +3,8 @@ import time
 import torch
 import argparse
 
-from model import SASRec
-from util import *
+from .model import *
+from .util import *
 
 def str2bool(s):
     if s not in {'false', 'true'}:
@@ -46,7 +46,7 @@ if __name__ == '__main__':
     print('average sequence length: %.2f' % (cc / len(user_train)))
     
     f = open(os.path.join(args.dataset + '_' + args.train_dir, 'log.txt'), 'w')
-    
+    weights, itemlst = calWeights(user_train, usernum, itemnum, 0.5)
     sampler = WarpSampler(user_train, usernum, itemnum, batch_size=args.batch_size, maxlen=args.maxlen, n_workers=3)
     model = SASRec(usernum, itemnum, args).to(args.device) # no ReLU activation in original SASRec implementation?
     
@@ -73,7 +73,6 @@ if __name__ == '__main__':
             print('pdb enabled for your quick check, pls type exit() if you do not need it')
             import pdb; pdb.set_trace()
             
-    
     if args.inference_only:
         model.eval()
         t_test = evaluate(model, dataset, args)
@@ -93,12 +92,16 @@ if __name__ == '__main__':
             u, seq, pos, neg = sampler.next_batch() # tuples to ndarray
             u, seq, pos, neg = np.array(u), np.array(seq), np.array(pos), np.array(neg)
             pos_logits, neg_logits = model(u, seq, pos, neg)
+            log_feats = model.log2feats(seq)
+            item_emb = model.get_itemEmb()
+            item_matrix = item_emb(torch.LongTensor(itemlst).to(args.device))
             pos_labels, neg_labels = torch.ones(pos_logits.shape, device=args.device), torch.zeros(neg_logits.shape, device=args.device)
             # print("\neye ball check raw_logits:"); print(pos_logits); print(neg_logits) # check pos_logits > 0, neg_logits < 0
             adam_optimizer.zero_grad()
             indices = np.where(pos != 0)
             loss = bce_criterion(pos_logits[indices], pos_labels[indices])
             loss += bce_criterion(neg_logits[indices], neg_labels[indices])
+            loss += loss_coverage(log_feats, item_matrix)
             for param in model.item_emb.parameters(): loss += args.l2_emb * torch.norm(param)
             loss.backward()
             adam_optimizer.step()
