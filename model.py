@@ -29,8 +29,6 @@ class SASRec(nn.Module):
         self.dev = args.device
         
         self.item_emb = nn.Embedding(self.item_num+1, args.hidden_units, padding_idx=0)
-
-        self.pos_emb = nn.Embedding(args.maxlen, args.hidden_units) 
         self.emb_dropout = nn.Dropout(p=args.dropout_rate)
 
         self.attention_layernorms = nn.ModuleList() # to be Q for self-attention
@@ -63,9 +61,9 @@ class SASRec(nn.Module):
         seqs *= self.item_emb.embedding_dim ** 0.5
         # positions = np.tile(np.array(range(log_seqs.shape[1])), [log_seqs.shape[0], 1])
         # seqs += self.pos_emb(torch.LongTensor(positions).to(self.dev))
-        pos_emb = positional_encoding(seqs.shape[0], seqs.shape[1], seqs.shape[2], dtype=torch.float32)
-        pos_emb.requires_grad = False
-        seqs += pos_emb
+        self.pos_emb = positional_encoding(seqs.shape[0], seqs.shape[1], seqs.shape[2], dtype=torch.float32)
+        self.pos_emb.requires_grad = False
+        seqs += self.pos_emb
         seqs = self.emb_dropout(seqs)
 
         timeline_mask = torch.BoolTensor(log_seqs == 0).to(self.dev)
@@ -115,41 +113,3 @@ class SASRec(nn.Module):
         # preds = self.pos_sigmoid(logits) # rank same item list for different users
 
         return logits # preds # (U, I)
-
-# class Model(nn.modules):
-#     device = "cuda"
-#     def __init__(self,
-#                  usernum,
-#                  itemnum,
-#                  args,
-#                  is_training=True,
-#                  reuse=None):
-#         self.is_training = is_training
-#         self.u = "hello"
-#         self.input_seq = args.maxlen
-
-    
-
-#     def positional_encoding(dim, sentence_length, dtype=torch.float32):
-#         position = torch.arange(0, sentence_length).unsqueeze(1).float()
-#         div_term = torch.exp(torch.arange(0, dim, 2).float() * -(torch.log(torch.tensor(10000.0)) / dim))
-
-#         encoded_vec = torch.sin(position * div_term)
-#         encoded_vec = torch.cat([encoded_vec, torch.cos(position * div_term)], dim=1)
-
-#         return encoded_vec
-    
-#     def normalize(inputs, epsilon=1e-8):
-#         inputs_shape = inputs.size()
-#         params_shape = inputs_shape[-1:]
-
-#         mean = torch.mean(inputs, dim=-1, keepdim=True)
-#         variance = torch.var(inputs, dim=-1, keepdim=True)
-        
-#         beta = torch.nn.Parameter(torch.zeros(params_shape))
-#         gamma = torch.nn.Parameter(torch.ones(params_shape))
-
-#         normalized = (inputs - mean) / torch.sqrt(variance + epsilon)
-#         outputs = gamma * normalized + beta
-
-#         return outputs
