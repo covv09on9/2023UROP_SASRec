@@ -17,16 +17,19 @@ def positional_encoding(batch_size, sentence_length, dim, dtype=torch.float32):
     
 def loss_coverage(log_feats, item_matrix, mask, itemnum):
     item_scores = torch.matmul(log_feats, item_matrix.t())
-    softmax_final = item_scores.softmax(dim=-1)
-    recommend_items = softmax_final.argmax(dim=-1)
-    recommend_items *= mask
-    non_zero_recommend_items = recommend_items[recommend_items != 0]
-    item_counts = torch.zeros(non_zero_recommend_items.max()+1, dtype=torch.int32)
-    item_counts.scatter_add_(0, non_zero_recommend_items.view(-1), torch.ones_like(non_zero_recommend_items.view(-1), dtype=torch.int32))
-    coverage = -1 * torch.sum(item_counts > 0).item() / itemnum
-    item_probs = item_counts / torch.sum(item_counts)
-    gini = 1 - torch.sum(item_probs**2)
-    loss = coverage + gini
+    softmax_scores = item_scores.softmax(dim=-1)
+    top_k_scores, top_k_items = torch.topk(softmax_scores, k=10, dim=-1)
+    top_k_scores *= mask.unsqueeze(-1)
+    coverage = -torch.log(torch.sum(torch.sum(torch.sum(top_k_scores, dim=0), dim=-1)))
+    skewness = -torch.sum(
+        torch.sum(
+            torch.sum(
+                top_k_scores*torch.log(
+                    (top_k_scores/(torch.sum(top_k_scores, dim=-1) + 1e-10).unsqueeze(-1))+1e-10), dim=-1), 
+                    dim=-1), dim=-1)
+
+    loss = coverage + skewness
+
     return loss
 
 def random_neq(l, r, s, weights):
@@ -161,6 +164,9 @@ def evaluate(model, dataset, args):
     HT = 0.0
     COV = 0.0
     valid_user = 0.0
+    total_items = []
+    total_seq = []
+
 
     if usernum>10000:
         users = random.sample(range(1, usernum + 1), 10000)
@@ -185,21 +191,24 @@ def evaluate(model, dataset, args):
             t = np.random.randint(1, itemnum + 1)
             while t in rated: t = np.random.randint(1, itemnum + 1)
             item_idx.append(t)
-        cov = covTop10(model, np.array([seq]), np.array(item_idx), args)
+        # cov = covTop10(model, np.array([seq]), np.array(item_idx), args)
         predictions = -model.predict(*[np.array(l) for l in [[u], [seq], item_idx]])
         predictions = predictions[0] # - for 1st argsort DESC
         rank = predictions.argsort().argsort()[0].item()
-
+        total_items.append(item_idx)
+        total_seq.append(seq)
         valid_user += 1
 
-        COV += cov
+        # COV += cov
         if rank < 10:
             NDCG += 1 / np.log2(rank + 2)
             HT += 1
         if valid_user % 100 == 0:
             print('.', end="")
             sys.stdout.flush()
-
+    total_seq = np.array(total_seq)
+    total_items = list(set(np.concatenate(total_items)))
+    COV = covTop10(model, total_seq, total_items, args)
     return NDCG / valid_user, HT / valid_user, COV / valid_user
 
 

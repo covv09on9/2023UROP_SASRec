@@ -49,8 +49,8 @@ if __name__ == '__main__':
     sampler = WarpSampler(user_train, usernum, itemnum, weights=weights, batch_size=args.batch_size, maxlen=args.maxlen, n_workers=3)
     model = SASRec(usernum, itemnum, args).to(args.device)
     
-    if os.path.exists("/Users/kimwoojin/UROP/2023UROP_SASRec/model/model.pth"):
-        model.load_state_dict(torch.load("/Users/kimwoojin/UROP/2023UROP_SASRec/model/model.pth"))
+    # if os.path.exists("/Users/kimwoojin/UROP/2023UROP_SASRec/model/model.pth"):
+    #     model.load_state_dict(torch.load("/Users/kimwoojin/UROP/2023UROP_SASRec/model/model.pth"))
 
     model.train()
     
