@@ -7,12 +7,22 @@ import numpy as np
 from collections import defaultdict
 import torch
 from multiprocessing import Process, Queue
-import torch.nn as nn
 
+CWD = os.getcwd()
+CUDA = torch.cuda.is_available()
+DEVICE = torch.device('cuda' if CUDA else 'cpu')
 
-def bpr_loss(pos, neg):
-    bpr_loss = nn.LogSigmoid()(pos.sum()-neg.sum())
-    return -1 * bpr_loss
+def set_seed(seed):
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    if CUDA:
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed) # if use multi-GPU
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
 
 def positional_encoding(batch_size, sentence_length, dim, dtype=torch.float32):
     encoded_vec = np.array([pos/np.power(10000, 2*i/dim) for pos in range(sentence_length) for i in range(dim)])
@@ -23,20 +33,19 @@ def positional_encoding(batch_size, sentence_length, dim, dtype=torch.float32):
     batch_encoding = single_sequence_encoding.unsqueeze(0).expand(batch_size, -1, -1)
     return batch_encoding
     
-def loss_coverage(log_feats, item_matrix):
-    mask = log_feats.sum(-1)
-    mask= torch.BoolTensor(mask == 0).to("cpu")
-    mask = ~mask
+def loss_coverage(log_feats, item_matrix, mask, topK):
     item_scores = torch.matmul(log_feats, item_matrix.t())
-    softmax_final = item_scores.softmax(dim=-1)
-    recommend_items = softmax_final.argmax(dim=-1)
-    non_zero_recommend_items = recommend_items[recommend_items != 0]
-    item_counts = torch.zeros(non_zero_recommend_items.max()+1, dtype=torch.int32)
-    item_counts.scatter_add_(0, non_zero_recommend_items.view(-1), torch.ones_like(non_zero_recommend_items.view(-1), dtype=torch.int32))
-    coverage = -1 * torch.sum(item_counts > 0).item() / len(item_counts)
-    item_probs = item_counts / torch.sum(item_counts)
-    gini = 1 - torch.sum(item_probs**2)
-    loss = coverage + gini
+    softmax_scores = item_scores.softmax(dim=-1)
+    top_k_scores, top_k_items = torch.topk(softmax_scores, k=topK, dim=-1)
+    top_k_scores *= mask.unsqueeze(-1)
+    top_k_scores = top_k_scores[:, -1, :]
+    scores_sum = torch.sum(top_k_scores, dim=0, keepdim=False)
+    epsilon = 0.00001
+    scores_sum += epsilon
+    d_loss = -torch.sum(torch.log(scores_sum))
+    norm_scores = top_k_scores / torch.sum(top_k_scores, dim=1, keepdim=True)
+    e_loss = torch.sum(torch.sum(norm_scores * torch.log(norm_scores), dim=1))
+    loss = d_loss + e_loss
     return loss
 
 def random_neq(l, r, s, weights):
@@ -122,8 +131,8 @@ def data_partition(fname):
     user_train = {}
     user_valid = {}
     user_test = {}
-    # assume user/item index starting from 1
-    f = open(os.path.join(os.curdir(),'/data/%s.txt' % fname), 'r')
+    
+    f = open(CWD + '/data/%s.txt' % fname, 'r')
     for line in f:
         u, i = line.rstrip().split(' ')
         u = int(u)
@@ -146,20 +155,38 @@ def data_partition(fname):
             user_test[user].append(User[user][-1])
     return [user_train, user_valid, user_test, usernum, itemnum]
 
-def evaluate(model, dataset, args):
+
+def covTop10(model, total_users:np.array, seq:np.array, item_idx:np.array, args):
+    item_scores = model.predict(total_users, seq, item_idx)
+    softmax_scores = item_scores.softmax(dim=-1)
+    _, top_k_items = torch.topk(softmax_scores, k=10, dim=-1)
+    non_zero_recommend_items = top_k_items.view(-1)[top_k_items.view(-1) != 0]
+    unique_items = torch.unique(non_zero_recommend_items)
+    coverage_percentage = (len(unique_items) / len(item_idx)) * 100.0
+    return coverage_percentage
+
+def evaluate(model, dataset, args, case:str = 'valid'):
     [train, valid, test, usernum, itemnum] = copy.deepcopy(dataset)
 
     NDCG = 0.0
     HT = 0.0
+    COV = 0.0
     valid_user = 0.0
+    total_items = []
+    total_seq = []
+    if case == "valid":
+        target = valid
+    else :
+        target = test
 
     if usernum>10000:
         users = random.sample(range(1, usernum + 1), 10000)
     else:
         users = range(1, usernum + 1)
+    total_users = users
     for u in users:
 
-        if len(train[u]) < 1 or len(test[u]) < 1: continue
+        if len(train[u]) < 1 or len(target[u]) < 1: continue
 
         seq = np.zeros([args.maxlen], dtype=np.int32)
         idx = args.maxlen - 1
@@ -171,62 +198,17 @@ def evaluate(model, dataset, args):
             if idx == -1: break
         rated = set(train[u])
         rated.add(0)
-        item_idx = [test[u][0]]
+        item_idx = [target[u][0]]
         for _ in range(100):
             t = np.random.randint(1, itemnum + 1)
             while t in rated: t = np.random.randint(1, itemnum + 1)
             item_idx.append(t)
-
-        predictions = -model.predict(*[np.array(l) for l in [[u], [seq], item_idx]])
-        predictions = predictions[0] # - for 1st argsort DESC
-
-        rank = predictions.argsort().argsort()[0].item()
-
-        valid_user += 1
-
-        if rank < 10:
-            NDCG += 1 / np.log2(rank + 2)
-            HT += 1
-        if valid_user % 100 == 0:
-            print('.', end="")
-            sys.stdout.flush()
-
-    return NDCG / valid_user, HT / valid_user
-
-
-def evaluate_valid(model, dataset, args):
-    [train, valid, test, usernum, itemnum] = copy.deepcopy(dataset)
-
-    NDCG = 0.0
-    valid_user = 0.0
-    HT = 0.0
-    if usernum>10000:
-        users = random.sample(range(1, usernum + 1), 10000)
-    else:
-        users = range(1, usernum + 1)
-    for u in users:
-        if len(train[u]) < 1 or len(valid[u]) < 1: continue
-
-        seq = np.zeros([args.maxlen], dtype=np.int32)
-        idx = args.maxlen - 1
-        for i in reversed(train[u]):
-            seq[idx] = i
-            idx -= 1
-            if idx == -1: break
-
-        rated = set(train[u])
-        rated.add(0)
-        item_idx = [valid[u][0]]
-        for _ in range(100):
-            t = np.random.randint(1, itemnum + 1)
-            while t in rated: t = np.random.randint(1, itemnum + 1)
-            item_idx.append(t)
-
+        
         predictions = -model.predict(*[np.array(l) for l in [[u], [seq], item_idx]])
         predictions = predictions[0]
-
         rank = predictions.argsort().argsort()[0].item()
-
+        total_items.append(item_idx)
+        total_seq.append(seq)
         valid_user += 1
 
         if rank < 10:
@@ -235,5 +217,7 @@ def evaluate_valid(model, dataset, args):
         if valid_user % 100 == 0:
             print('.', end="")
             sys.stdout.flush()
-
-    return NDCG / valid_user, HT / valid_user
+    total_seq = np.array(total_seq)
+    total_items = list(set(np.concatenate(total_items)))
+    COV = covTop10(model, np.array(total_users), total_seq, total_items, args)
+    return NDCG / valid_user, HT / valid_user, COV / valid_user

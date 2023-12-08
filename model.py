@@ -6,6 +6,9 @@ from typing import Union, Callable
 import numpy as np
 from util import *
 
+CUDA = torch.cuda.is_available()
+DEVICE = torch.device('cuda' if CUDA else 'cpu')
+
 class PointWiseFeedForward(nn.Module):
     def __init__(self, hidden_units, dropout_rate):
         super(PointWiseFeedForward, self).__init__()
@@ -26,7 +29,7 @@ class SASRec(nn.Module):
         super(SASRec, self).__init__()
         self.user_num = user_num
         self.item_num = item_num
-        self.dev = args.device
+        self.dev = DEVICE
         
         self.item_emb = nn.Embedding(self.item_num+1, args.hidden_units, padding_idx=0)
         self.emb_dropout = nn.Dropout(p=args.dropout_rate)
@@ -41,15 +44,12 @@ class SASRec(nn.Module):
         for _ in range(args.num_blocks):
             new_attn_layernorm = nn.LayerNorm(args.hidden_units, eps=1e-8)
             self.attention_layernorms.append(new_attn_layernorm)
-
             new_attn_layer =  nn.MultiheadAttention(args.hidden_units,
-                                                            args.num_heads,
-                                                            args.dropout_rate)
+                                                    args.num_heads,
+                                                    args.dropout_rate)
             self.attention_layers.append(new_attn_layer)
-
             new_fwd_layernorm = nn.LayerNorm(args.hidden_units, eps=1e-8)
             self.forward_layernorms.append(new_fwd_layernorm)
-
             new_fwd_layer = PointWiseFeedForward(args.hidden_units, args.dropout_rate)
             self.forward_layers.append(new_fwd_layer)
 
@@ -59,15 +59,14 @@ class SASRec(nn.Module):
     def log2feats(self, log_seqs):
         seqs = self.item_emb(torch.LongTensor(log_seqs).to(self.dev))
         seqs *= self.item_emb.embedding_dim ** 0.5
-        # positions = np.tile(np.array(range(log_seqs.shape[1])), [log_seqs.shape[0], 1])
-        # seqs += self.pos_emb(torch.LongTensor(positions).to(self.dev))
         self.pos_emb = positional_encoding(seqs.shape[0], seqs.shape[1], seqs.shape[2], dtype=torch.float32)
         self.pos_emb.requires_grad = False
-        seqs += self.pos_emb
+        self.pos_emb.to(self.dev)
+        seqs += self.pos_emb.to(self.dev)
         seqs = self.emb_dropout(seqs)
 
         timeline_mask = torch.BoolTensor(log_seqs == 0).to(self.dev)
-        seqs *= ~timeline_mask.unsqueeze(-1) # broadcast in last dim
+        seqs *= ~timeline_mask.unsqueeze(-1) 
 
         tl = seqs.shape[1] # time dim len for enforce causality
         attention_mask = ~torch.tril(torch.ones((tl, tl), dtype=torch.bool, device=self.dev))
@@ -77,39 +76,25 @@ class SASRec(nn.Module):
             Q = self.attention_layernorms[i](seqs)
             mha_outputs, _ = self.attention_layers[i](Q, seqs, seqs, 
                                             attn_mask=attention_mask)
-                                            # key_padding_mask=timeline_mask
-                                            # need_weights=False) this arg do not work?
             seqs = Q + mha_outputs
             seqs = torch.transpose(seqs, 0, 1)
-
             seqs = self.forward_layernorms[i](seqs)
             seqs = self.forward_layers[i](seqs)
             seqs *=  ~timeline_mask.unsqueeze(-1)
-
         log_feats = self.last_layernorm(seqs) # (U, T, C) -> (U, -1, C)
-        
-        return log_feats
+        return log_feats.to(self.dev)
 
     def forward(self, user_ids, log_seqs, pos_seqs, neg_seqs): # for training        
         log_feats = self.log2feats(log_seqs) # user_ids hasn't been used yet
-        
         pos_embs = self.item_emb(torch.LongTensor(pos_seqs).to(self.dev))
         neg_embs = self.item_emb(torch.LongTensor(neg_seqs).to(self.dev))
-
         pos_logits = (log_feats * pos_embs).sum(dim=-1)
         neg_logits = (log_feats * neg_embs).sum(dim=-1)
-
         return pos_logits, neg_logits # pos_pred, neg_pred
 
     def predict(self, user_ids, log_seqs, item_indices): # for inference
         log_feats = self.log2feats(log_seqs) # user_ids hasn't been used yet
-
         final_feat = log_feats[:, -1, :] # only use last QKV classifier, a waste
-
         item_embs = self.item_emb(torch.LongTensor(item_indices).to(self.dev)) # (U, I, C)
-
         logits = item_embs.matmul(final_feat.unsqueeze(-1)).squeeze(-1)
-
-        # preds = self.pos_sigmoid(logits) # rank same item list for different users
-
         return logits # preds # (U, I)
