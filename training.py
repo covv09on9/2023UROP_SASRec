@@ -39,6 +39,7 @@ f.close()
 
 if __name__ == '__main__':
     set_seed(args.seed)
+    set_seed(args.seed)
     # if os.path.exists("/Users/kimwoojin/UROP/2023UROP_SASRec/model/model.pth"):
     #     model.load_state_dict(torch.load("/Users/kimwoojin/UROP/2023UROP_SASRec/model/model.pth"))
 
