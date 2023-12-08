@@ -66,7 +66,8 @@ class SASRec(nn.Module):
         # seqs += self.pos_emb(torch.LongTensor(positions).to(self.dev))
         self.pos_emb = positional_encoding(seqs.shape[0], seqs.shape[1], seqs.shape[2], dtype=torch.float32)
         self.pos_emb.requires_grad = False
-        seqs += self.pos_emb
+        self.pos_emb.to(self.dev)
+        seqs += self.pos_emb.to(self.dev)
         seqs = self.emb_dropout(seqs)
 
         timeline_mask = torch.BoolTensor(log_seqs == 0).to(self.dev)
@@ -91,7 +92,7 @@ class SASRec(nn.Module):
 
         log_feats = self.last_layernorm(seqs) # (U, T, C) -> (U, -1, C)
 
-        return log_feats
+        return log_feats.to(self.dev)
 
     def forward(self, user_ids, log_seqs, pos_seqs, neg_seqs): # for training        
         log_feats = self.log2feats(log_seqs) # user_ids hasn't been used yet
