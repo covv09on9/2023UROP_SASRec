@@ -155,11 +155,11 @@ def data_partition(fname):
 
 
 def covTop10(model, seq:np.array, item_idx:np.array, args):
-    mask = torch.BoolTensor(seq == 0).to(args.device)
+    mask = torch.BoolTensor(seq == 0).to(DEVICE)
     mask = ~mask
     log_feats = model.log2feats(seq)
     item_emb = model.get_itemEmb()
-    item_matrix = item_emb(torch.LongTensor(item_idx).to(args.device))
+    item_matrix = item_emb(torch.LongTensor(item_idx).to(DEVICE))
     item_scores = torch.matmul(log_feats, item_matrix.t())
     softmax_scores = item_scores.softmax(dim=-1)
     _, top_k_items = torch.topk(softmax_scores, k=10, dim=-1)

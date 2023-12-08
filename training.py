@@ -38,7 +38,7 @@ with open(os.path.join(args.dataset + '_' + args.train_dir, 'args.txt'), 'w') as
 f.close()
 
 if __name__ == '__main__':
-    set_seed()
+    set_seed(args.seed)
     # if os.path.exists("/Users/kimwoojin/UROP/2023UROP_SASRec/model/model.pth"):
     #     model.load_state_dict(torch.load("/Users/kimwoojin/UROP/2023UROP_SASRec/model/model.pth"))
 
@@ -76,8 +76,6 @@ if __name__ == '__main__':
         model.train()
         start_time = time.time()
         if args.inference_only: break # just to decrease identition
-        if epoch == 1:
-            num_batch = 0
         if epoch <= args.reclen:
             epoch_loss = 0.0
             for step in range(num_batch): # tqdm(range(num_batch), total=num_batch, ncols=70, leave=False, unit='b'):
@@ -86,6 +84,8 @@ if __name__ == '__main__':
                 u, seq, pos, neg = sampler.next_batch() # tuples to ndarray
                 u, seq, pos, neg = np.array(u), np.array(seq), np.array(pos), np.array(neg)
                 pos_logits, neg_logits = model(u, seq, pos, neg)
+                pos_labels, neg_labels = torch.ones(pos_logits.shape, device=DEVICE), torch.zeros(neg_logits.shape, device=DEVICE)
+                indices = np.where(pos != 0)
                 loss = bce_criterion(pos_logits[indices], pos_labels[indices])
                 loss += bce_criterion(neg_logits[indices], neg_labels[indices])
                 for param in model.item_emb.parameters(): loss += args.l2_emb * torch.norm(param)
@@ -108,10 +108,7 @@ if __name__ == '__main__':
                 mask.requires_grad=False
                 log_feats = model.log2feats(seq)
                 item_emb = model.get_itemEmb()
-                item_matrix = item_emb(torch.LongTensor(itemlst).to(args.device))
-                pos_labels, neg_labels = torch.ones(pos_logits.shape, device=args.device), torch.zeros(neg_logits.shape, device=args.device)
-
-                indices = np.where(pos != 0)
+                item_matrix = item_emb(torch.LongTensor(itemlst).to(DEVICE))
                 loss = loss_coverage(log_feats, item_matrix, mask, len(itemlst))
                 epoch_loss += loss
                 loss.backward()
