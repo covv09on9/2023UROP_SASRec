@@ -6,12 +6,16 @@ import argparse
 from model import *
 from util import *
 
+CUDA = torch.cuda.is_available()
+DEVICE = torch.device('cuda' if CUDA else 'cpu')
+
 def str2bool(s):
     if s not in {'false', 'true'}:
         raise ValueError('Not a valid boolean string')
     return s == 'true'
 
 parser = argparse.ArgumentParser()
+parser.add_argument('--seed', required=True, default=0, type=int)
 parser.add_argument('--dataset', required=True)
 parser.add_argument('--train_dir', required=True)
 parser.add_argument('--batch_size', default=128, type=int)
@@ -23,10 +27,10 @@ parser.add_argument('--num_epochs', default=30, type=int)
 parser.add_argument('--num_heads', default=1, type=int)
 parser.add_argument('--dropout_rate', default=0.5, type=float)
 parser.add_argument('--l2_emb', default=0.0, type=float)
-parser.add_argument('--device', default='cpu', type=str)
 parser.add_argument('--inference_only', default=False, type=str2bool)
-
+parser.add_argument('--reclen', default=30, type=int, help='Number of epoch with recommendation loss')
 args = parser.parse_args()
+
 if not os.path.isdir(args.dataset + '_' + args.train_dir):
     os.makedirs(args.dataset + '_' + args.train_dir)
 with open(os.path.join(args.dataset + '_' + args.train_dir, 'args.txt'), 'w') as f:
@@ -34,6 +38,10 @@ with open(os.path.join(args.dataset + '_' + args.train_dir, 'args.txt'), 'w') as
 f.close()
 
 if __name__ == '__main__':
+    set_seed()
+    # if os.path.exists("/Users/kimwoojin/UROP/2023UROP_SASRec/model/model.pth"):
+    #     model.load_state_dict(torch.load("/Users/kimwoojin/UROP/2023UROP_SASRec/model/model.pth"))
+
     # global dataset
     dataset = data_partition(args.dataset)
 
@@ -47,12 +55,7 @@ if __name__ == '__main__':
     f = open(os.path.join(args.dataset + '_' + args.train_dir, 'log.txt'), 'w')
     weights, itemlst = calWeight(user_train, usernum, itemnum, 0.5)
     sampler = WarpSampler(user_train, usernum, itemnum, weights=weights, batch_size=args.batch_size, maxlen=args.maxlen, n_workers=3)
-    model = SASRec(usernum, itemnum, args).to(args.device)
-    
-    # if os.path.exists("/Users/kimwoojin/UROP/2023UROP_SASRec/model/model.pth"):
-    #     model.load_state_dict(torch.load("/Users/kimwoojin/UROP/2023UROP_SASRec/model/model.pth"))
-
-    model.train()
+    model = SASRec(usernum, itemnum, args).to(DEVICE)
     
     epoch_start_idx = 1
             
@@ -70,33 +73,51 @@ if __name__ == '__main__':
     final_loss = 100000
     target = [0,0]
     for epoch in range(epoch_start_idx, args.num_epochs + 1):
+        model.train()
+        start_time = time.time()
         if args.inference_only: break # just to decrease identition
-        epoch_loss = 0.0
-        for step in range(num_batch): # tqdm(range(num_batch), total=num_batch, ncols=70, leave=False, unit='b'):
-            u, seq, pos, neg = sampler.next_batch() # tuples to ndarray
-            u, seq, pos, neg = np.array(u), np.array(seq), np.array(pos), np.array(neg)
-            pos_logits, neg_logits = model(u, seq, pos, neg)
-            mask = torch.BoolTensor(seq == 0).to("cpu")
-            mask = ~mask
-            mask.requires_grad=False
-            log_feats = model.log2feats(seq)
-            item_emb = model.get_itemEmb()
-            item_matrix = item_emb(torch.LongTensor(itemlst).to(args.device))
-            pos_labels, neg_labels = torch.ones(pos_logits.shape, device=args.device), torch.zeros(neg_logits.shape, device=args.device)
-            # print("\neye ball check raw_logits:"); print(pos_logits); print(neg_logits) # check pos_logits > 0, neg_logits < 0
-            adam_optimizer.zero_grad()
-            indices = np.where(pos != 0)
-            loss_bce = bce_criterion(pos_logits[indices], pos_labels[indices])
-            loss_bce += bce_criterion(neg_logits[indices], neg_labels[indices])
-            loss_cov = loss_coverage(log_feats, item_matrix, mask, len(itemlst))
-            loss = loss_bce + loss_cov
-            for param in model.item_emb.parameters(): loss += args.l2_emb * torch.norm(param)
-            
-            epoch_loss += loss
-            loss.backward()
-            adam_optimizer.step()
-            print("loss in epoch {} iteration {}: {} / coverage in epoch {} iteration {}: {}".format(epoch, step, loss_bce.item(), epoch, step, loss_cov.item())) # expected 0.4~0.6 after init few epochs
-        
+        if epoch == 1:
+            num_batch = 0
+        if epoch <= args.reclen:
+            epoch_loss = 0.0
+            for step in range(num_batch): # tqdm(range(num_batch), total=num_batch, ncols=70, leave=False, unit='b'):
+                adam_optimizer.zero_grad()
+
+                u, seq, pos, neg = sampler.next_batch() # tuples to ndarray
+                u, seq, pos, neg = np.array(u), np.array(seq), np.array(pos), np.array(neg)
+                pos_logits, neg_logits = model(u, seq, pos, neg)
+                loss = bce_criterion(pos_logits[indices], pos_labels[indices])
+                loss += bce_criterion(neg_logits[indices], neg_labels[indices])
+                for param in model.item_emb.parameters(): loss += args.l2_emb * torch.norm(param)
+                
+                epoch_loss += loss
+                loss.backward()
+                adam_optimizer.step()
+                # expected 0.4~0.6 after init few epochs
+                print("accuracy loss in epoch {} iteration {}: {}".format(epoch, step, loss.item()))
+
+        else:
+            epoch_loss = 0.0
+            for step in range(num_batch): # tqdm(range(num_batch), total=num_batch, ncols=70, leave=False, unit='b'):
+                adam_optimizer.zero_grad()
+                u, seq, pos, neg = sampler.next_batch() # tuples to ndarray
+                u, seq, pos, neg = np.array(u), np.array(seq), np.array(pos), np.array(neg)
+                pos_logits, neg_logits = model(u, seq, pos, neg)
+                mask = torch.BoolTensor(seq == 0).to(DEVICE)
+                mask = ~mask
+                mask.requires_grad=False
+                log_feats = model.log2feats(seq)
+                item_emb = model.get_itemEmb()
+                item_matrix = item_emb(torch.LongTensor(itemlst).to(args.device))
+                pos_labels, neg_labels = torch.ones(pos_logits.shape, device=args.device), torch.zeros(neg_logits.shape, device=args.device)
+
+                indices = np.where(pos != 0)
+                loss = loss_coverage(log_feats, item_matrix, mask, len(itemlst))
+                epoch_loss += loss
+                loss.backward()
+                adam_optimizer.step()
+                print("diversity loss in epoch {} iteration {}: {}".format(epoch, step, loss.item()))
+                
         if epoch_loss/num_batch < final_loss :
             final_loss = epoch_loss/num_batch
             model.eval()
@@ -113,7 +134,7 @@ if __name__ == '__main__':
             model.train()
             if target[0] < t_valid[0] and target[1] < t_valid[1]:
                  fname = "model.pth"
-                 folder = "/Users/kimwoojin/UROP/2023UROP_SASRec/model"
+                 folder = "/Users/kimwoojin/UROP/2023UROP_SASRec/model_2"
                  torch.save(model.state_dict(), os.path.join(folder, fname))
 
 

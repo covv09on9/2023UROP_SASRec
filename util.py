@@ -6,6 +6,21 @@ from collections import defaultdict
 import torch
 from multiprocessing import Process, Queue
 
+CUDA = torch.cuda.is_available()
+DEVICE = torch.device('cuda' if CUDA else 'cpu')
+
+def set_seed(seed):
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    if CUDA:
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed) # if use multi-GPU
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
+
 def positional_encoding(batch_size, sentence_length, dim, dtype=torch.float32):
     encoded_vec = np.array([pos/np.power(10000, 2*i/dim) for pos in range(sentence_length) for i in range(dim)])
     encoded_vec[::2] = np.sin(encoded_vec[::2])
@@ -15,10 +30,10 @@ def positional_encoding(batch_size, sentence_length, dim, dtype=torch.float32):
     batch_encoding = single_sequence_encoding.unsqueeze(0).expand(batch_size, -1, -1)
     return batch_encoding
     
-def loss_coverage(log_feats, item_matrix, mask, itemnum):
+def loss_coverage(log_feats, item_matrix, mask, topK):
     item_scores = torch.matmul(log_feats, item_matrix.t())
     softmax_scores = item_scores.softmax(dim=-1)
-    top_k_scores, top_k_items = torch.topk(softmax_scores, k=10, dim=-1)
+    top_k_scores, top_k_items = torch.topk(softmax_scores, k=topK, dim=-1)
     top_k_scores *= mask.unsqueeze(-1)
     coverage = -torch.log(torch.sum(torch.sum(torch.sum(top_k_scores, dim=0), dim=-1)))
     skewness = -torch.sum(

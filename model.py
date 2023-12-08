@@ -6,6 +6,9 @@ from typing import Union, Callable
 import numpy as np
 from util import *
 
+CUDA = torch.cuda.is_available()
+DEVICE = torch.device('cuda' if CUDA else 'cpu')
+
 class PointWiseFeedForward(nn.Module):
     def __init__(self, hidden_units, dropout_rate):
         super(PointWiseFeedForward, self).__init__()
@@ -26,7 +29,7 @@ class SASRec(nn.Module):
         super(SASRec, self).__init__()
         self.user_num = user_num
         self.item_num = item_num
-        self.dev = args.device
+        self.dev = DEVICE
         
         self.item_emb = nn.Embedding(self.item_num+1, args.hidden_units, padding_idx=0)
         self.emb_dropout = nn.Dropout(p=args.dropout_rate)
