@@ -2,5 +2,6 @@ practice.ipynb
 */.venv/*
 .venv/*
 *__train/*
+*_train/*
 __pycache__/*
 model/*

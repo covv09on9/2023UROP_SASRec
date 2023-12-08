@@ -135,28 +135,6 @@ if __name__ == '__main__':
                  fname = "model.pth"
                  folder = "/Users/kimwoojin/UROP/2023UROP_SASRec/model_2"
                  torch.save(model.state_dict(), os.path.join(folder, fname))
-
-
-        # if epoch % 20 == 0:
-        #     model.eval()
-        #     t1 = time.time() - t0
-        #     T += t1
-        #     print('Evaluating', end='')
-        #     t_test = evaluate(model, dataset, args)
-        #     t_valid = evaluate_valid(model, dataset, args)
-        #     print('epoch:%d, time: %f(s), valid (NDCG@10: %.4f, HR@10: %.4f), test (NDCG@10: %.4f, HR@10: %.4f)'
-        #             % (epoch, T, t_valid[0], t_valid[1], t_test[0], t_test[1]))
-    
-        #     f.write(str(t_valid) + ' ' + str(t_test) + '\n')
-        #     f.flush()
-        #     t0 = time.time()
-        #     model.train()
-    
-        # if epoch == args.num_epochs:
-        #     folder = args.dataset + '_' + args.train_dir
-        #     fname = 'SASRec.epoch={}.lr={}.layer={}.head={}.hidden={}.maxlen={}.pth'
-        #     fname = fname.format(args.num_epochs, args.lr, args.num_blocks, args.num_heads, args.hidden_units, args.maxlen)
-        #     torch.save(model.state_dict(), os.path.join(folder, fname))
     
     f.close()
     sampler.close()
