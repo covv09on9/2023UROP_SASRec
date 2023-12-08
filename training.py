@@ -81,7 +81,6 @@ if __name__ == '__main__':
             epoch_loss = 0.0
             for step in range(num_batch): # tqdm(range(num_batch), total=num_batch, ncols=70, leave=False, unit='b'):
                 adam_optimizer.zero_grad()
-
                 u, seq, pos, neg = sampler.next_batch() # tuples to ndarray
                 u, seq, pos, neg = np.array(u), np.array(seq), np.array(pos), np.array(neg)
                 pos_logits, neg_logits = model(u, seq, pos, neg)
@@ -90,7 +89,6 @@ if __name__ == '__main__':
                 loss = bce_criterion(pos_logits[indices], pos_labels[indices])
                 loss += bce_criterion(neg_logits[indices], neg_labels[indices])
                 for param in model.item_emb.parameters(): loss += args.l2_emb * torch.norm(param)
-                
                 epoch_loss += loss
                 loss.backward()
                 adam_optimizer.step()
@@ -110,7 +108,7 @@ if __name__ == '__main__':
                 log_feats = model.log2feats(seq)
                 item_emb = model.get_itemEmb()
                 item_matrix = item_emb(torch.LongTensor(itemlst).to(DEVICE))
-                loss = loss_coverage(log_feats, item_matrix, mask, len(itemlst))
+                loss = loss_coverage(log_feats, item_matrix, mask, topK=10)
                 epoch_loss += loss
                 loss.backward()
                 adam_optimizer.step()

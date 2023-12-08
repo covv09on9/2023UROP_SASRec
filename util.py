@@ -35,16 +35,14 @@ def loss_coverage(log_feats, item_matrix, mask, topK):
     softmax_scores = item_scores.softmax(dim=-1)
     top_k_scores, top_k_items = torch.topk(softmax_scores, k=topK, dim=-1)
     top_k_scores *= mask.unsqueeze(-1)
-    coverage = -torch.log(torch.sum(torch.sum(torch.sum(top_k_scores, dim=0), dim=-1)))
-    skewness = -torch.sum(
-        torch.sum(
-            torch.sum(
-                top_k_scores*torch.log(
-                    (top_k_scores/(torch.sum(top_k_scores, dim=-1) + 1e-10).unsqueeze(-1))+1e-10), dim=-1), 
-                    dim=-1), dim=-1)
-
-    loss = coverage + skewness
-
+    top_k_scores = top_k_scores[:, -1, :]
+    scores_sum = torch.sum(top_k_scores, dim=0, keepdim=False)
+    epsilon = 0.00001
+    scores_sum += epsilon
+    d_loss = -torch.sum(torch.log(scores_sum))
+    norm_scores = top_k_scores / torch.sum(top_k_scores, dim=1, keepdim=True)
+    e_loss = torch.sum(torch.sum(norm_scores * torch.log(norm_scores), dim=1))
+    loss = d_loss + e_loss
     return loss
 
 def random_neq(l, r, s, weights):
@@ -271,5 +269,7 @@ def evaluate_valid(model, dataset, args):
         if valid_user % 100 == 0:
             print('.', end="")
             sys.stdout.flush()
-
+    total_seq = np.array(total_seq)
+    total_items = list(set(np.concatenate(total_items)))
+    COV = covTop10(model, total_seq, total_items, args)
     return NDCG / valid_user, HT / valid_user, COV / valid_user
